@@ -153,8 +153,17 @@ function advanceStatus(current: string, incoming: string): string {
  * against the store and take whichever names a conversation we started.
  */
 async function findConversationByNumber(numbers: string[]): Promise<Conversation | null> {
-  for (const number of numbers) {
-    const conversation = await getConversation(number);
+  // Sent sends numbers as bare digits ("18018223533") while conversations are
+  // keyed on E.164 ("+18018223533"), so the raw value never matches. Lifecycle
+  // events hid this because they are looked up by message_id instead — only an
+  // actual inbound reply exercises this path.
+  const candidates = numbers.flatMap((number) => {
+    const digits = number.replace(/\D/g, "");
+    return [number, `+${digits}`, digits];
+  });
+
+  for (const candidate of new Set(candidates)) {
+    const conversation = await getConversation(candidate);
     if (conversation) return conversation;
   }
   return null;
@@ -248,8 +257,14 @@ export async function POST(request: Request) {
     if (event.isInbound) {
       const conversation = await findConversationByNumber(event.numbers);
       // An inbound from a number with no conversation is ignored on purpose —
-      // this app only continues threads it started.
-      if (conversation) await handleInbound(conversation, event);
+      // this app only continues threads it started. Logged rather than passed
+      // over in silence, because "the reply did nothing" is indistinguishable
+      // from "the webhook never arrived" without it.
+      if (!conversation) {
+        console.warn(`[webhook] inbound from ${event.numbers.join("/")} matched no conversation`);
+        return NextResponse.json({ ok: true, ignored: "no conversation for number" });
+      }
+      await handleInbound(conversation, event);
       return NextResponse.json({ ok: true });
     }
 
