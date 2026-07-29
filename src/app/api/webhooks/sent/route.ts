@@ -14,45 +14,79 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Receives Sent's message lifecycle events and drives two things:
+ * Receives Sent's message events and drives two things:
  *
  *   - the live status panel (QUEUED -> PROCESSED -> ROUTED -> SENT ->
  *     DELIVERED -> READ, plus the channel Sent resolved)
  *   - the conversational loop, on `message.received`
  *
- * Sent's webhook payload shape is not published, so parsing here is
- * deliberately tolerant and every delivery is recorded verbatim — see
- * /api/messages?debug=1.
+ * The payload shape below was captured from live deliveries via
+ * `POST /v3/webhooks/{id}/test`, not from documentation:
+ *
+ *   {
+ *     "field": "message",
+ *     "event": "message.routed",          // absent on generic `message` tests
+ *     "timestamp": "2026-07-29T02:12:24Z",
+ *     "payload": {                        // note: `payload`, not `data`
+ *       "message_id": "...",
+ *       "message_status": "ROUTED",       // note: `message_status`, not `status`
+ *       "channel": "sms",
+ *       "outbound_number": "+1...",
+ *       // inbound instead carries: inbound_number, text, received_at
+ *     }
+ *   }
  */
 
 /** Sent's opt-out keywords. It handles these itself; replying would be a violation. */
 const OPT_OUT = new Set(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]);
 
-function verifySignature(rawBody: string, request: Request): boolean {
+/** Reject deliveries older than this, so a captured request cannot be replayed. */
+const MAX_SIGNATURE_AGE_SECONDS = 300;
+
+/**
+ * Sent signs webhooks with the Standard Webhooks scheme. It is not documented
+ * anywhere I could find, so for the record — this was recovered by brute-forcing
+ * a known-good delivery:
+ *
+ *   key       = base64-decode(signing secret with the "whsec_" prefix removed)
+ *   content   = `{x-webhook-id}.{x-webhook-timestamp}.{raw request body}`
+ *   signature = base64(HMAC-SHA256(key, content))
+ *   header    = `x-webhook-signature: v1,<signature>`
+ *
+ * The body must be the raw bytes as received. Parsing and re-serialising the
+ * JSON changes it and the digest will not match.
+ */
+function verifySignature(rawBody: string, request: Request): { ok: boolean; reason: string } {
   const secret = process.env.SENT_WEBHOOK_SECRET;
   if (!secret) {
     console.warn("[webhook] SENT_WEBHOOK_SECRET is not set — skipping signature check");
-    return true;
+    return { ok: true, reason: "unverified (no secret configured)" };
   }
 
-  const provided =
-    request.headers.get("x-sent-signature") ??
-    request.headers.get("x-webhook-signature") ??
-    request.headers.get("x-signature");
-  if (!provided) return false;
+  const header = request.headers.get("x-webhook-signature");
+  const id = request.headers.get("x-webhook-id");
+  const timestamp = request.headers.get("x-webhook-timestamp");
+  if (!header || !id || !timestamp) return { ok: false, reason: "missing signature headers" };
 
-  // Accept either encoding — Sent's is not documented.
-  const candidates = (["hex", "base64"] as const).map((encoding) =>
-    createHmac("sha256", secret).update(rawBody).digest(encoding),
-  );
-  // Some senders prefix the scheme, e.g. "sha256=abc123".
-  const supplied = provided.startsWith("sha256=") ? provided.slice(7) : provided;
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (!Number.isFinite(age) || age > MAX_SIGNATURE_AGE_SECONDS) {
+    return { ok: false, reason: `timestamp outside replay window (${Math.round(age)}s)` };
+  }
 
-  return candidates.some((expected) => {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const expected = createHmac("sha256", key)
+    .update(`${id}.${timestamp}.${rawBody}`)
+    .digest("base64");
+
+  // The header can carry several space-separated `v<n>,<signature>` entries.
+  const matched = header.split(" ").some((part) => {
+    const supplied = part.includes(",") ? part.slice(part.indexOf(",") + 1) : part;
     const a = Buffer.from(expected);
     const b = Buffer.from(supplied);
     return a.length === b.length && timingSafeEqual(a, b);
   });
+
+  return matched ? { ok: true, reason: "verified" } : { ok: false, reason: "signature mismatch" };
 }
 
 interface NormalizedEvent {
@@ -60,37 +94,58 @@ interface NormalizedEvent {
   status: string;
   messageId?: string;
   channel?: Channel;
-  from?: string;
-  body?: string;
+  text?: string;
+  /** Both numbers, because which one is the contact depends on direction. */
+  numbers: string[];
+  isInbound: boolean;
 }
 
-function normalize(payload: Record<string, unknown>): NormalizedEvent {
-  const data = (payload.data ?? payload) as Record<string, unknown>;
-  const pick = (...keys: string[]): string | undefined => {
-    for (const key of keys) {
-      const value = data[key] ?? payload[key];
-      if (typeof value === "string" && value) return value;
-    }
-    return undefined;
-  };
+function normalize(body: Record<string, unknown>): NormalizedEvent {
+  const data = (body.payload ?? body.data ?? body) as Record<string, unknown>;
+  const str = (value: unknown) => (typeof value === "string" && value ? value : undefined);
 
-  const event = pick("event", "type", "event_type", "event_name") ?? "unknown";
-  // "message.delivered" -> "DELIVERED"
-  const status = pick("status") ?? event.split(".").pop()!.toUpperCase();
+  const event = str(body.event) ?? str(body.field) ?? "unknown";
+  const text = str(data.text) ?? str(data.body);
+  const isInbound = event.endsWith("received") || Boolean(text && data.received_at);
+
+  // Lifecycle events carry message_status; fall back to the event suffix.
+  const status =
+    str(data.message_status) ??
+    str(data.status) ??
+    (isInbound ? "RECEIVED" : event.split(".").pop()!.toUpperCase());
 
   return {
     event,
     status,
-    messageId: pick("message_id", "messageId", "id"),
-    channel: pick("channel") as Channel | undefined,
-    from: pick("from", "phone_international", "format_e164", "phone", "to"),
-    body: pick("body", "text", "message", "content"),
+    messageId: str(data.message_id),
+    channel: str(data.channel) as Channel | undefined,
+    text,
+    numbers: [
+      str(data.inbound_number),
+      str(data.outbound_number),
+      str(data.from),
+      str(data.phone_international),
+    ].filter((n): n is string => Boolean(n)),
+    isInbound,
   };
+}
+
+/**
+ * Inbound events carry both numbers and the synthetic payloads use them
+ * inconsistently, so rather than guess which field holds the contact, try each
+ * against the store and take whichever names a conversation we started.
+ */
+async function findConversationByNumber(numbers: string[]): Promise<Conversation | null> {
+  for (const number of numbers) {
+    const conversation = await getConversation(number);
+    if (conversation) return conversation;
+  }
+  return null;
 }
 
 /** Records an inbound message and has Claude answer it. */
 async function handleInbound(conversation: Conversation, event: NormalizedEvent) {
-  const body = (event.body ?? "").trim();
+  const body = (event.text ?? "").trim();
   const now = new Date().toISOString();
 
   conversation.messages.push({
@@ -139,33 +194,45 @@ async function handleInbound(conversation: Conversation, event: NormalizedEvent)
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
+  const verification = verifySignature(rawBody, request);
 
-  if (!verifySignature(rawBody, request)) {
-    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
-  }
-
-  let payload: Record<string, unknown>;
+  let payload: Record<string, unknown> = {};
   try {
     payload = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
-  // Keep the raw delivery so the exact field names can be read off live traffic.
+  // Keep the raw delivery so the contract can be read off live traffic. rawBody
+  // is kept verbatim because signature verification is byte-sensitive — a
+  // re-serialized payload will not reproduce the sender's digest.
   await recordWebhookSample({
     receivedAt: new Date().toISOString(),
+    signature: verification,
     headers: Object.fromEntries(request.headers),
+    rawBody,
     payload,
   });
+
+  if (!verification.ok) {
+    // Rejecting an unverified delivery is the correct default. It is worth
+    // being able to turn off: rejecting also stops the traffic you need in
+    // order to work out an undocumented signing scheme in the first place.
+    if (process.env.SENT_WEBHOOK_ENFORCE !== "false") {
+      console.warn(`[webhook] rejected: ${verification.reason}`);
+      return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+    }
+    console.warn(`[webhook] UNVERIFIED, processing anyway: ${verification.reason}`);
+  }
 
   const event = normalize(payload);
 
   try {
-    if (event.event.endsWith("received")) {
-      const conversation = event.from ? await getConversation(event.from) : null;
-      if (conversation) await handleInbound(conversation, event);
+    if (event.isInbound) {
+      const conversation = await findConversationByNumber(event.numbers);
       // An inbound from a number with no conversation is ignored on purpose —
       // this app only continues threads it started.
+      if (conversation) await handleInbound(conversation, event);
       return NextResponse.json({ ok: true });
     }
 
