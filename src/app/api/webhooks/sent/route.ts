@@ -8,7 +8,8 @@ import {
   recordWebhookSample,
   saveConversation,
 } from "@/lib/store";
-import type { Channel, Conversation, MessageRecord } from "@/lib/types";
+import { LIFECYCLE } from "@/lib/types";
+import type { Channel, Conversation, Lifecycle, MessageRecord } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,6 +132,22 @@ function normalize(body: Record<string, unknown>): NormalizedEvent {
 }
 
 /**
+ * Lifecycle webhooks do not arrive in order. A real WhatsApp delivery came in
+ * as SENT -> READ -> DELIVERED, and last-write-wins left the headline status on
+ * DELIVERED for a message the recipient had already read.
+ *
+ * So the displayed status only ever moves forward through LIFECYCLE. Anything
+ * outside it (FAILED, BLOCKED, SCHEDULED) is not part of the happy path and
+ * always wins — those must never be masked by a late in-order event.
+ */
+function advanceStatus(current: string, incoming: string): string {
+  const rank = (s: string) => LIFECYCLE.indexOf(s.toUpperCase() as Lifecycle);
+  const [a, b] = [rank(current), rank(incoming)];
+  if (b === -1 || a === -1) return incoming;
+  return b > a ? incoming : current;
+}
+
+/**
  * Inbound events carry both numbers and the synthetic payloads use them
  * inconsistently, so rather than guess which field holds the contact, try each
  * against the store and take whichever names a conversation we started.
@@ -245,7 +262,7 @@ export async function POST(request: Request) {
     const message = conversation.messages.find((m) => m.messageId === event.messageId);
     if (!message) return NextResponse.json({ ok: true, ignored: "unknown message" });
 
-    message.status = event.status;
+    message.status = advanceStatus(message.status, event.status);
     // The moment auto-detect becomes concrete: "sent" -> "sms" | "whatsapp".
     if (event.channel) message.channel = event.channel;
     if (!message.events.some((e) => e.status === event.status)) {

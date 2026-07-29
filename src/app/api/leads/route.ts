@@ -56,7 +56,10 @@ export async function POST(request: Request) {
     const outbound: MessageRecord = {
       messageId: recipient.message_id,
       direction: "outbound",
-      body: draft.reply,
+      // What Sent actually put on the wire, which in template mode is the
+      // approved template body, NOT Claude's draft. Showing the draft here
+      // would put text on the panel that the handset never received.
+      body: recipient.body ?? draft.reply,
       // "sent" — unresolved. The webhook rewrites this once Sent routes it.
       channel: recipient.channel,
       status: result.status,
