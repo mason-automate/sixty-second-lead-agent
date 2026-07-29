@@ -47,11 +47,41 @@ export interface GuardFailure {
  * stops the deployed form being embedded and driven from another site, and the
  * rate limits below are what actually bound the damage.
  */
-export function checkOrigin(request: Request): GuardFailure | null {
-  const allowed = (process.env.ALLOWED_ORIGINS ?? "")
+function allowedOrigins(): string[] {
+  return (process.env.ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((o) => o.trim())
     .filter(Boolean);
+}
+
+/**
+ * CORS headers for a cross-origin browser submission — the callneo.ai form
+ * posts JSON straight to this endpoint from the page, which the browser blocks
+ * without these (and preflights with OPTIONS first, because a JSON body is not
+ * a "simple" request).
+ *
+ * The origin is echoed back only when it is on the allow list, so this grants
+ * nothing that checkOrigin would not already have permitted.
+ */
+export function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get("origin");
+  if (!origin) return {};
+
+  const allowed = allowedOrigins();
+  const permitted = allowed.length === 0 || allowed.includes(origin);
+  if (!permitted) return {};
+
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+export function checkOrigin(request: Request): GuardFailure | null {
+  const allowed = allowedOrigins();
   if (allowed.length === 0) return null;
 
   const origin = request.headers.get("origin");

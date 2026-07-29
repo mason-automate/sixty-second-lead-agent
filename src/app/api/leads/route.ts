@@ -4,6 +4,7 @@ import {
   checkOrigin,
   checkRateLimits,
   clientIp,
+  corsHeaders,
   validatePhone,
   validateText,
 } from "@/lib/guards";
@@ -37,16 +38,25 @@ function toE164(input: string): string {
   return `+${digits}`;
 }
 
+/** Preflight. A JSON body makes the browser ask before it will POST here. */
+export async function OPTIONS(request: Request) {
+  return new Response(null, { status: 204, headers: corsHeaders(request) });
+}
+
 export async function POST(request: Request) {
+  const cors = corsHeaders(request);
+  const reply = (body: unknown, status: number) =>
+    NextResponse.json(body, { status, headers: cors });
+
   try {
     const originFailure = checkOrigin(request);
     if (originFailure) {
-      return NextResponse.json({ error: originFailure.error }, { status: originFailure.status });
+      return reply({ error: originFailure.error }, originFailure.status);
     }
 
     const { name, phone, message } = await request.json();
     if (!name || !phone) {
-      return NextResponse.json({ error: "name and phone are required" }, { status: 400 });
+      return reply({ error: "name and phone are required" }, 400);
     }
 
     const to = toE164(phone);
@@ -60,7 +70,7 @@ export async function POST(request: Request) {
       validateText(String(name), inquiry) ??
       (await checkRateLimits(clientIp(request), to));
     if (failure) {
-      return NextResponse.json({ error: failure.error }, { status: failure.status });
+      return reply({ error: failure.error }, failure.status);
     }
 
     // 1. Claude drafts the reply.
@@ -99,9 +109,9 @@ export async function POST(request: Request) {
     };
     await saveConversation(conversation);
 
-    return NextResponse.json({ conversation, draft });
+    return reply({ conversation, draft }, 200);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: detail }, { status: 500 });
+    return reply({ error: detail }, 500);
   }
 }
