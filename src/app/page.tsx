@@ -1,65 +1,214 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { ChannelBadge } from "@/components/ChannelBadge";
+import { Lifecycle } from "@/components/Lifecycle";
+import type { Conversation } from "@/lib/types";
 
 export default function Home() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [backend, setBackend] = useState<string>("");
+
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(null);
+
+  // The Sent API has no message-list endpoint, so everything rendered below
+  // arrived via the webhook receiver. Polling keeps the panel honest and the
+  // stack boring — no websockets, no realtime database.
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch("/api/messages", { cache: "no-store" });
+      const data = await response.json();
+      setConversations(data.conversations ?? []);
+      setBackend(data.storageBackend ?? "");
+    } catch {
+      /* transient poll failure — the next tick will pick it up */
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 1000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    setElapsed(null);
+    const startedAt = performance.now();
+
+    try {
+      const response = await fetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, phone, message }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Request failed");
+
+      setElapsed(Math.round(performance.now() - startedAt));
+      setMessage("");
+      await refresh();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : String(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-12">
+      <header className="mb-10">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          60-Second Lead Agent
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/50">
+          A lead submits the form. Claude drafts a reply. One call to{" "}
+          <code className="rounded bg-white/10 px-1 font-mono text-xs">
+            POST /v3/messages
+          </code>{" "}
+          with no{" "}
+          <code className="rounded bg-white/10 px-1 font-mono text-xs">channel</code>{" "}
+          field — and Sent decides whether that person gets an SMS or a WhatsApp
+          message. Watch the badge resolve.
+        </p>
+      </header>
+
+      <section className="mb-12 rounded-xl border border-white/10 bg-white/[0.03] p-6">
+        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-white/40">
+          New lead
+        </h2>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs text-white/50">Name</span>
+            <input
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Jordan Reyes"
+              className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none focus:border-white/30"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs text-white/50">Phone</span>
+            <input
+              required
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+1 801 555 0100"
+              className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-sm outline-none focus:border-white/30"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 sm:col-span-2">
+            <span className="text-xs text-white/50">What do you need?</span>
+            <textarea
+              rows={2}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="We miss a lot of calls after hours and I want to stop losing those jobs."
+              className="resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none focus:border-white/30"
+            />
+          </label>
+          <div className="flex items-center gap-4 sm:col-span-2">
+            <button
+              type="submit"
+              disabled={pending}
+              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {pending ? "Drafting and sending…" : "Submit lead"}
+            </button>
+            {elapsed !== null && (
+              <span className="font-mono text-xs text-emerald-400">
+                drafted + sent in {(elapsed / 1000).toFixed(1)}s
+              </span>
+            )}
+            {error && <span className="font-mono text-xs text-red-400">{error}</span>}
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-white/40">
+            Live delivery status
+          </h2>
+          <span className="font-mono text-[10px] text-white/25">
+            polling /api/messages · store: {backend || "…"}
+          </span>
         </div>
-      </main>
-    </div>
+
+        {conversations.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-white/10 px-6 py-12 text-center text-sm text-white/30">
+            No messages yet. Submit a lead above.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {conversations.map((conversation) => (
+              <article
+                key={conversation.phone}
+                className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
+              >
+                <header className="mb-4 flex items-baseline gap-3">
+                  <h3 className="font-medium">{conversation.name}</h3>
+                  <span className="font-mono text-xs text-white/40">
+                    {conversation.phone}
+                  </span>
+                </header>
+
+                <ul className="space-y-3">
+                  {conversation.messages.map((msg) => {
+                    const isOutbound = msg.direction === "outbound";
+                    const terminal =
+                      msg.channel === "sms" && msg.status === "DELIVERED";
+
+                    return (
+                      <li
+                        key={msg.messageId}
+                        className={`rounded-lg border p-3 ${
+                          isOutbound
+                            ? "border-white/10 bg-black/30"
+                            : "border-white/5 bg-white/[0.06]"
+                        }`}
+                      >
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">
+                            {isOutbound ? "→ outbound" : "← inbound"}
+                          </span>
+                          <ChannelBadge channel={msg.channel} />
+                        </div>
+                        <p className="mb-2.5 text-sm leading-relaxed text-white/90">
+                          {msg.body}
+                        </p>
+                        {isOutbound && (
+                          <Lifecycle events={msg.events} terminal={terminal} />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <footer className="mt-16 border-t border-white/10 pt-6 text-xs text-white/30">
+        Multi-channel messaging by{" "}
+        <a
+          href="https://sent.dm"
+          className="text-white/50 underline underline-offset-2 hover:text-white/80"
+        >
+          Sent
+        </a>
+        . Routing, formatting, fallbacks, and compliance are handled after the
+        send — this app never picks a channel.
+      </footer>
+    </main>
   );
 }

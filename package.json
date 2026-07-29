@@ -6,9 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "draft": "node --env-file=.env.local --experimental-strip-types scripts/test-draft.mts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@upstash/redis": "^1.38.0",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4"

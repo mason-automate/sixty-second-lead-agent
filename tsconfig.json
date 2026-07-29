@@ -30,5 +30,6 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "//": "scripts/ is run directly by Node's type stripping, not compiled by Next, so it uses explicit .ts import extensions that this config disallows.",
+  "exclude": ["node_modules", "scripts"]
 }
