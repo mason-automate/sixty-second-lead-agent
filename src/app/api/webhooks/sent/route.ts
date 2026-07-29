@@ -287,8 +287,15 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    // Never 500 a webhook for an application-side failure — that invites retries.
+    // Never 500 a webhook for an application-side failure — a non-2xx
+    // permanently kills the webhook on Sent's side.
+    //
+    // The reason is echoed into the response body because Sent stores it on
+    // the delivery record: `GET /v3/webhooks/{id}/events` then shows exactly
+    // why a handler failed. Without it the only symptom is a bare
+    // `{"ok":false}` and no way to tell a Claude failure from a send failure.
+    const detail = error instanceof Error ? error.message : String(error);
     console.error("[webhook] handler failed", error);
-    return NextResponse.json({ ok: false }, { status: 200 });
+    return NextResponse.json({ ok: false, error: detail }, { status: 200 });
   }
 }

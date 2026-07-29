@@ -56,6 +56,8 @@ Which message you are writing:
 
 Set intent to "booking" only when the person has proposed or accepted a specific time. When they have, put that time in bookingDate and bookingTime as short strings (for example "Tue Jul 30" and "2:15pm MT"); otherwise leave both as empty strings.
 
+Nothing books the call automatically yet, so never claim it is scheduled. Do not say you have set it up, booked it, or put it on the calendar. Say a person will confirm the time. Recording the intent is your job; confirming it is a human's.
+
 <knowledge_base>
 ${KNOWLEDGE_BASE}
 </knowledge_base>`;
