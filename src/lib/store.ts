@@ -19,6 +19,16 @@ interface Kv {
   set(key: string, value: unknown): Promise<void>;
   sadd(key: string, member: string): Promise<void>;
   smembers(key: string): Promise<string[]>;
+  /**
+   * Increment a counter that expires, and return its new value. This is the
+   * primitive the rate limiter is built on.
+   *
+   * It lives here rather than coming from @upstash/ratelimit on purpose: that
+   * package only works against Redis, and the whole point of the memory
+   * backend is that `git clone && npm run dev` needs no external accounts. A
+   * limiter that silently does nothing locally is worse than a simple one.
+   */
+  incr(key: string, ttlSeconds: number): Promise<number>;
 }
 
 function redisKv(): Kv | null {
@@ -39,16 +49,28 @@ function redisKv(): Kv | null {
       await redis.sadd(key, member);
     },
     smembers: (key) => redis.smembers(key),
+    async incr(key, ttlSeconds) {
+      const count = await redis.incr(key);
+      // Only the first caller sets the expiry, so the window is fixed from the
+      // first hit rather than sliding forward with every request — otherwise a
+      // steady stream of traffic would keep the key alive indefinitely.
+      if (count === 1) await redis.expire(key, ttlSeconds);
+      return count;
+    },
   };
 }
 
 function memoryKv(): Kv {
   // Survives hot reloads in `next dev`, which throws away module state.
   const g = globalThis as typeof globalThis & {
-    __leadAgentStore?: { values: Map<string, unknown>; sets: Map<string, Set<string>> };
+    __leadAgentStore?: {
+      values: Map<string, unknown>;
+      sets: Map<string, Set<string>>;
+      counters: Map<string, { count: number; expiresAt: number }>;
+    };
   };
-  g.__leadAgentStore ??= { values: new Map(), sets: new Map() };
-  const { values, sets } = g.__leadAgentStore;
+  g.__leadAgentStore ??= { values: new Map(), sets: new Map(), counters: new Map() };
+  const { values, sets, counters } = g.__leadAgentStore;
 
   return {
     async get<T>(key: string) {
@@ -65,12 +87,25 @@ function memoryKv(): Kv {
     async smembers(key) {
       return [...(sets.get(key) ?? [])];
     },
+    async incr(key, ttlSeconds) {
+      const now = Date.now();
+      const existing = counters.get(key);
+      const entry =
+        existing && existing.expiresAt > now
+          ? existing
+          : { count: 0, expiresAt: now + ttlSeconds * 1000 };
+      entry.count += 1;
+      counters.set(key, entry);
+      return entry.count;
+    },
   };
 }
 
-const kv: Kv = redisKv() ?? memoryKv();
+// Built once. Calling redisKv() per use would open a new client each time.
+const redis = redisKv();
+const kv: Kv = redis ?? memoryKv();
 
-export const storageBackend = redisKv() ? "upstash-redis" : "in-memory";
+export const storageBackend = redis ? "upstash-redis" : "in-memory";
 
 const CONVERSATION_INDEX = "conversations";
 const conversationKey = (phone: string) => `conversation:${phone}`;
@@ -125,4 +160,14 @@ export async function recordWebhookSample(sample: unknown): Promise<void> {
 
 export async function getWebhookSample(): Promise<unknown> {
   return kv.get("webhook:last");
+}
+
+/** Increment a rate-limit counter and report whether it is now over budget. */
+export async function hitLimit(
+  key: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<{ allowed: boolean; count: number }> {
+  const count = await kv.incr(`ratelimit:${key}`, windowSeconds);
+  return { allowed: count <= limit, count };
 }

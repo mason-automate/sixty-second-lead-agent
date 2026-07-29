@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
 import { draftFirstReply } from "@/lib/claude";
+import {
+  checkOrigin,
+  checkRateLimits,
+  clientIp,
+  validatePhone,
+  validateText,
+} from "@/lib/guards";
 import { sendMessage } from "@/lib/sent";
 import { saveConversation } from "@/lib/store";
 import type { Conversation, MessageRecord } from "@/lib/types";
@@ -32,6 +39,11 @@ function toE164(input: string): string {
 
 export async function POST(request: Request) {
   try {
+    const originFailure = checkOrigin(request);
+    if (originFailure) {
+      return NextResponse.json({ error: originFailure.error }, { status: originFailure.status });
+    }
+
     const { name, phone, message } = await request.json();
     if (!name || !phone) {
       return NextResponse.json({ error: "name and phone are required" }, { status: 400 });
@@ -39,6 +51,17 @@ export async function POST(request: Request) {
 
     const to = toE164(phone);
     const inquiry = String(message ?? "").trim();
+
+    // Everything that can reject the request runs before Claude is called and
+    // before anything is sent — a rejected lead should cost neither a token nor
+    // a message.
+    const failure =
+      validatePhone(to) ??
+      validateText(String(name), inquiry) ??
+      (await checkRateLimits(clientIp(request), to));
+    if (failure) {
+      return NextResponse.json({ error: failure.error }, { status: failure.status });
+    }
 
     // 1. Claude drafts the reply.
     const draft = await draftFirstReply({ name, inquiry });
