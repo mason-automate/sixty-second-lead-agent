@@ -197,16 +197,16 @@ async function maybeBook(
   conversation: Conversation,
   draft: Draft,
   slots: Array<{ label: string; value: string }>,
-): Promise<void> {
-  if (!draft.bookingSlot || conversation.booking || !bookingEnabled()) return;
+): Promise<boolean> {
+  if (!draft.bookingSlot || conversation.booking || !bookingEnabled()) return false;
 
   if (!slots.some((s) => s.value === draft.bookingSlot)) {
     console.warn(`[booking] ignoring slot not offered this turn: ${draft.bookingSlot}`);
-    return;
+    return false;
   }
   if (!conversation.email) {
     console.warn(`[booking] no email on ${conversation.phone} — cannot book`);
-    return;
+    return false;
   }
 
   try {
@@ -257,10 +257,12 @@ async function maybeBook(
       createdAt: new Date().toISOString(),
     });
     await saveConversation(conversation);
+    return true;
   } catch (error) {
-    // Deliberately swallowed: the lead's reply still goes out. Booking is the
-    // bonus, the reply is the product.
+    // Deliberately swallowed, and the `false` matters: the conversational reply
+    // still goes out, so a booking failure costs the lead nothing.
     console.error("[booking] failed", error);
+    return false;
   }
 }
 
@@ -306,7 +308,10 @@ async function handleInbound(conversation: Conversation, event: NormalizedEvent)
     slots,
   });
 
-  await maybeBook(conversation, draft, slots);
+  // When the booking lands, the approved template IS the reply — it says the
+  // same thing with the confirmed date and time in it. Sending Claude's draft
+  // as well would deliver two near-identical messages back to back.
+  if (await maybeBook(conversation, draft, slots)) return;
 
   // Still no `channel` — the reply routes the same way the first message did.
   const result = await sendMessage({ to: [conversation.phone], text: draft.reply });
