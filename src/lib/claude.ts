@@ -56,7 +56,12 @@ Which message you are writing:
 
 Set intent to "booking" only when the person has proposed or accepted a specific time. When they have, put that time in bookingDate and bookingTime as short strings (for example "Tue Jul 30" and "2:15pm MT"); otherwise leave both as empty strings.
 
-Nothing books the call automatically yet, so never claim it is scheduled. Do not say you have set it up, booked it, or put it on the calendar. Say a person will confirm the time. Recording the intent is your job; confirming it is a human's.
+Booking a call:
+- When times are listed under <available_times>, those are the only ones open. Offer at most two, in plain words ("Thu 10am or Fri 9am?"). Never invent a time that is not listed, and never imply the calendar is wide open.
+- When the person accepts one, copy that time's value into bookingSlot exactly as written. It is an identifier, not text to tidy up — do not reformat, round, or translate it.
+- If they ask for a time that is not listed, say it is taken and offer the nearest one that is.
+- When no <available_times> block is present you have no view of the calendar at all. That is not the same as being busy: do not say a time is taken, do not offer alternatives, and never name a time of your own. Take the time they proposed, still record it in bookingDate and bookingTime, leave bookingSlot empty, and say a person will confirm it.
+- Only say the call is set once you have filled in bookingSlot. Otherwise say someone will confirm — never claim a call is scheduled when it is not.
 
 <knowledge_base>
 ${KNOWLEDGE_BASE}
@@ -82,8 +87,13 @@ const REPLY_SCHEMA = {
       type: "string",
       description: 'Short time if intent is "booking", e.g. "2:15pm MT". Empty string otherwise.',
     },
+    bookingSlot: {
+      type: "string",
+      description:
+        "The exact slot value copied character-for-character from the offered times, when the person has accepted one. Empty string otherwise. Never invent or reformat this value.",
+    },
   },
-  required: ["reply", "intent", "bookingDate", "bookingTime"],
+  required: ["reply", "intent", "bookingDate", "bookingTime", "bookingSlot"],
   additionalProperties: false,
 } as const;
 
@@ -92,6 +102,12 @@ export interface Draft {
   intent: "greeting" | "question" | "booking" | "optout" | "other";
   bookingDate: string;
   bookingTime: string;
+  /**
+   * An exact value from the offered slots. The app books this, never the prose
+   * in bookingDate/bookingTime — so a misread date fails the lookup instead of
+   * booking the wrong time.
+   */
+  bookingSlot: string;
 }
 
 /** One SMS segment in GSM-7. Past this the message splits and costs double. */
@@ -106,6 +122,21 @@ const MAX_LENGTH = 160;
  * the model wrote the opt-out into would silently drop it.
  */
 const OPT_OUT_SUFFIX = " Reply STOP to opt out.";
+
+/**
+ * Appends the real open slots to a turn.
+ *
+ * These go in the user turn rather than the system prompt because they change
+ * on every request — the system prompt is the stable half, and mixing
+ * per-request data into it is what makes a prompt uncacheable later.
+ *
+ * The value is what gets booked, so it is presented as an opaque identifier.
+ */
+function withAvailability(text: string, slots: Array<{ label: string; value: string }>): string {
+  if (slots.length === 0) return text;
+  const lines = slots.map((s) => `- ${s.label} (value: ${s.value})`).join("\n");
+  return `${text}\n\n<available_times>\n${lines}\n</available_times>`;
+}
 
 /** Cuts to a budget at a sentence boundary if there is one, else a word boundary. */
 function trimToBudget(text: string, budget: number): string {
@@ -234,6 +265,7 @@ export function draftFollowUp(params: {
   inquiry: string;
   history: Array<{ direction: "outbound" | "inbound"; body: string }>;
   inbound: string;
+  slots?: Array<{ label: string; value: string }>;
 }): Promise<Draft> {
   const messages: Anthropic.MessageParam[] = [
     {
@@ -253,7 +285,10 @@ What they wrote: ${params.inquiry}`,
     });
   }
 
-  messages.push({ role: "user", content: params.inbound });
+  messages.push({
+    role: "user",
+    content: withAvailability(params.inbound, params.slots ?? []),
+  });
   // No opt-out line mid-conversation — it goes on the first message only.
   return draft(messages, MAX_LENGTH - 10);
 }

@@ -15,6 +15,7 @@ interface Draft {
   intent: string;
   bookingDate: string;
   bookingTime: string;
+  bookingSlot: string;
 }
 
 function check(label: string, draft: Draft, ms: number, expect?: (d: Draft) => string | null) {
@@ -104,6 +105,43 @@ if (!check("booking", booking, t4, (d) =>
   d.intent === "booking" && d.bookingDate && d.bookingTime
     ? null
     : `expected intent=booking with date+time, got intent=${d.intent}`,
+)) failures++;
+
+// 5. With real slots offered, the accepted one must come back as an exact,
+//    unmodified value — the app books that string, so any tidying is a bug.
+const SLOTS = [
+  { label: "Thu, Jul 30, 10:00 AM", value: "2026-07-30T16:00:00.000Z" },
+  { label: "Thu, Jul 30, 2:00 PM", value: "2026-07-30T20:00:00.000Z" },
+  { label: "Fri, Jul 31, 9:00 AM", value: "2026-07-31T15:00:00.000Z" },
+];
+const [slotted, t5] = await time(() =>
+  draftFollowUp({
+    ...lead,
+    history: [{ direction: "outbound", body: first.reply }],
+    inbound: "Thursday at 2pm works for me.",
+    slots: SLOTS,
+  }),
+);
+if (!check("booking picks an exact offered slot", slotted, t5, (d) =>
+  d.bookingSlot === "2026-07-30T20:00:00.000Z"
+    ? null
+    : `expected the 2pm slot value verbatim, got ${JSON.stringify(d.bookingSlot)}`,
+)) failures++;
+
+// 6. A time that is not open must not be booked. The model should say so and
+//    counter-offer — inventing a slot here would book a call nobody can attend.
+const [unavailable, t6] = await time(() =>
+  draftFollowUp({
+    ...lead,
+    history: [{ direction: "outbound", body: first.reply }],
+    inbound: "Can we do Saturday at 6am?",
+    slots: SLOTS,
+  }),
+);
+if (!check("declines a time that is not open", unavailable, t6, (d) =>
+  d.bookingSlot === "" || SLOTS.some((s) => s.value === d.bookingSlot)
+    ? null
+    : `invented a slot that was never offered: ${d.bookingSlot}`,
 )) failures++;
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) failed.`}`);

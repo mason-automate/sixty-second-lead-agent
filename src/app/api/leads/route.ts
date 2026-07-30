@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       return reply({ error: originFailure.error }, originFailure.status);
     }
 
-    const { name, phone, message } = await request.json();
+    const { name, phone, email, message } = await request.json();
     if (!name || !phone) {
       return reply({ error: "name and phone are required" }, 400);
     }
@@ -103,6 +103,9 @@ export async function POST(request: Request) {
     const conversation: Conversation = {
       phone: to,
       name,
+      // Optional on the form, required by Cal.com — without it the agent can
+      // still converse, it just cannot put the call on the calendar.
+      ...(typeof email === "string" && email.trim() ? { email: email.trim() } : {}),
       inquiry,
       createdAt: now,
       messages: [outbound],

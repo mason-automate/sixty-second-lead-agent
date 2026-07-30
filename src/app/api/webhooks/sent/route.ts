@@ -1,6 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import {
+  BOOKING_TIMEZONE,
+  bookingEnabled,
+  createBooking,
+  describeSlots,
+  getAvailability,
+} from "@/lib/cal";
 import { draftFollowUp } from "@/lib/claude";
+import type { Draft } from "@/lib/claude";
 import { sendMessage } from "@/lib/sent";
 import {
   findConversationByMessageId,
@@ -169,6 +177,78 @@ async function findConversationByNumber(numbers: string[]): Promise<Conversation
   return null;
 }
 
+/**
+ * Books the call when the lead accepted a slot, then sends the Meta-approved
+ * `booking_confirmation` template.
+ *
+ * Three guards, each protecting against a different failure:
+ *
+ *  - `conversation.booking` — Sent retries webhooks, and a retry must not put a
+ *    second call on the calendar. Presence of the record is the idempotency key.
+ *  - slot must be one we just offered — the model returns an opaque identifier,
+ *    so a hallucinated or reformatted value fails the lookup instead of
+ *    booking a time nobody agreed to.
+ *  - an email must exist — Cal.com requires an attendee email.
+ *
+ * A failure never breaks the reply. The lead still gets the message; it just
+ * says a person will confirm, which is the honest outcome when booking failed.
+ */
+async function maybeBook(
+  conversation: Conversation,
+  draft: Draft,
+  slots: Array<{ label: string; value: string }>,
+): Promise<void> {
+  if (!draft.bookingSlot || conversation.booking || !bookingEnabled()) return;
+
+  if (!slots.some((s) => s.value === draft.bookingSlot)) {
+    console.warn(`[booking] ignoring slot not offered this turn: ${draft.bookingSlot}`);
+    return;
+  }
+  if (!conversation.email) {
+    console.warn(`[booking] no email on ${conversation.phone} — cannot book`);
+    return;
+  }
+
+  try {
+    const booking = await createBooking({
+      start: draft.bookingSlot,
+      name: conversation.name,
+      email: conversation.email,
+      phone: conversation.phone,
+    });
+
+    conversation.booking = {
+      uid: booking.uid,
+      start: booking.start ?? draft.bookingSlot,
+      bookedAt: new Date().toISOString(),
+    };
+    await saveConversation(conversation);
+
+    // The approved template, whose {{name}}/{{date}}/{{time}} exist for exactly
+    // this. Sent as a template rather than free-form so a confirmation still
+    // lands if the session window has closed by the time the call is booked.
+    const when = new Date(conversation.booking.start);
+    const fmt = (opts: Intl.DateTimeFormatOptions) =>
+      new Intl.DateTimeFormat("en-US", { ...opts, timeZone: BOOKING_TIMEZONE }).format(when);
+
+    await sendMessage({
+      to: [conversation.phone],
+      template: {
+        name: process.env.SENT_BOOKING_TEMPLATE ?? "booking_confirmation",
+        parameters: {
+          name: conversation.name,
+          date: fmt({ weekday: "short", month: "short", day: "numeric" }),
+          time: fmt({ hour: "numeric", minute: "2-digit" }),
+        },
+      },
+    });
+  } catch (error) {
+    // Deliberately swallowed: the lead's reply still goes out. Booking is the
+    // bonus, the reply is the product.
+    console.error("[booking] failed", error);
+  }
+}
+
 /** Records an inbound message and has Claude answer it. */
 async function handleInbound(conversation: Conversation, event: NormalizedEvent) {
   const body = (event.text ?? "").trim();
@@ -189,6 +269,18 @@ async function handleInbound(conversation: Conversation, event: NormalizedEvent)
   // message to someone who just opted out.
   if (OPT_OUT.has(body.toUpperCase())) return;
 
+  // Real open slots, fetched before drafting so the model can only offer times
+  // that exist. A failure here degrades to "no times listed", which the prompt
+  // handles by promising a human follow-up — never a booking we can't make.
+  let slots: Array<{ label: string; value: string }> = [];
+  if (bookingEnabled() && !conversation.booking) {
+    try {
+      slots = describeSlots(await getAvailability());
+    } catch (error) {
+      console.warn("[booking] availability lookup failed", error);
+    }
+  }
+
   const draft = await draftFollowUp({
     name: conversation.name,
     inquiry: conversation.inquiry,
@@ -196,7 +288,10 @@ async function handleInbound(conversation: Conversation, event: NormalizedEvent)
       .slice(0, -1)
       .map(({ direction, body }) => ({ direction, body })),
     inbound: body,
+    slots,
   });
+
+  await maybeBook(conversation, draft, slots);
 
   // Still no `channel` — the reply routes the same way the first message did.
   const result = await sendMessage({ to: [conversation.phone], text: draft.reply });

@@ -39,11 +39,23 @@ export interface MessageRecord {
   createdAt: string;
 }
 
+/** Set once a call is actually on the calendar. Its presence is the idempotency guard. */
+export interface BookingRecord {
+  /** Cal.com booking uid. */
+  uid: string;
+  /** ISO-8601 UTC start, exactly as booked. */
+  start: string;
+  bookedAt: string;
+}
+
 export interface Conversation {
   /** E.164 phone number — doubles as the conversation key. */
   phone: string;
   name: string;
+  /** Optional — Cal.com requires an attendee email, so no email means no booking. */
+  email?: string;
   inquiry: string;
   createdAt: string;
   messages: MessageRecord[];
+  booking?: BookingRecord;
 }

@@ -11,7 +11,9 @@ export default function Home() {
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
+  const [consent, setConsent] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
@@ -47,7 +49,7 @@ export default function Home() {
       const response = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, message }),
+        body: JSON.stringify({ name, phone, email, message }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Request failed");
@@ -106,6 +108,18 @@ export default function Home() {
             />
           </label>
           <label className="flex flex-col gap-1.5 sm:col-span-2">
+            <span className="text-xs text-white/50">
+              Email <span className="text-white/30">· needed to put a call on the calendar</span>
+            </span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none focus:border-white/30"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 sm:col-span-2">
             <span className="text-xs text-white/50">What do you need?</span>
             <textarea
               rows={2}
@@ -115,10 +129,29 @@ export default function Home() {
               className="resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none focus:border-white/30"
             />
           </label>
+          {/*
+            Consent is not decoration. This endpoint sends a real SMS on a
+            registered A2P number, and texting someone who did not ask for it is
+            how a campaign gets suspended. Unchecked by default, and required —
+            a pre-ticked box is not consent.
+          */}
+          <label className="flex items-start gap-2.5 sm:col-span-2">
+            <input
+              type="checkbox"
+              required
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-white"
+            />
+            <span className="text-xs leading-relaxed text-white/50">
+              I agree to receive text messages at the number provided. Message and data
+              rates may apply. Reply STOP to opt out.
+            </span>
+          </label>
           <div className="flex items-center gap-4 sm:col-span-2">
             <button
               type="submit"
-              disabled={pending}
+              disabled={pending || !consent}
               className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {pending ? "Drafting and sending…" : "Submit lead"}
