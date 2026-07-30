@@ -46,8 +46,33 @@ export const dynamic = "force-dynamic";
  *   }
  */
 
-/** Sent's opt-out keywords. It handles these itself; replying would be a violation. */
-const OPT_OUT = new Set(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]);
+/**
+ * Keywords the carrier campaign reserves. Sent answers all of these itself with
+ * the registered compliance text, so the agent must stay silent on them.
+ *
+ * This is a compliance boundary, not a nicety. Replying to HELP with anything
+ * other than the registered help text means the required response either never
+ * arrives or is buried under a sales message — and answering an opt-out
+ * keyword is worse still. Found the hard way: texting HELP got a booking reply
+ * about available appointment times, because only the opt-out words were
+ * listed here.
+ *
+ * All three registered sets belong in one list. Opt-out alone is not enough:
+ * `YES` is a registered opt-in keyword on this campaign, so a lead answering
+ * "yes" to a question would otherwise get an AI reply *and* an opt-in
+ * confirmation from Sent.
+ *
+ * If you clone this, reconcile the list against your own campaign registration
+ * — drift between the two is silent and only shows up in an audit.
+ */
+const RESERVED_KEYWORDS = new Set([
+  // Opt-out
+  "STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "STOPALL", "REVOKE",
+  // Opt-in
+  "START", "YES", "SUBSCRIBE", "JOIN", "OPTIN", "UNSTOP",
+  // Help
+  "HELP", "INFO",
+]);
 
 /** Reject deliveries older than this, so a captured request cannot be replayed. */
 const MAX_SIGNATURE_AGE_SECONDS = 300;
@@ -282,9 +307,15 @@ async function handleInbound(conversation: Conversation, event: NormalizedEvent)
   });
   await saveConversation(conversation);
 
-  // Sent handles STOP/START/HELP itself. Answering on top of that would send a
-  // message to someone who just opted out.
-  if (OPT_OUT.has(body.toUpperCase())) return;
+  // Recorded above so the panel still shows it, then dropped. Sent owns the
+  // reply to every reserved keyword; anything we send is talking over a
+  // compliance response. Punctuation is stripped because "STOP." and "Help!"
+  // are the same intent to a human and to a carrier auditor.
+  const keyword = body.toUpperCase().replace(/[^A-Z]/g, "");
+  if (RESERVED_KEYWORDS.has(keyword)) {
+    console.log(`[webhook] reserved keyword "${keyword}" — Sent answers this, staying silent`);
+    return;
+  }
 
   // Real open slots, fetched before drafting so the model can only offer times
   // that exist. A failure here degrades to "no times listed", which the prompt
