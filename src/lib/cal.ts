@@ -72,12 +72,15 @@ async function call<T>(
 function parseSlots(data: unknown): string[] {
   const times: string[] = [];
 
+  // `start` is what 2024-09-04 actually returns; the docs say `time`, which is
+  // an older shape. Accept both — reading the wrong key yields an empty list,
+  // which surfaces as "no times available" rather than as an error.
   const pushEntry = (entry: unknown) => {
-    if (typeof entry === "string") times.push(entry);
-    else if (entry && typeof entry === "object" && "time" in entry) {
-      const { time } = entry as { time?: unknown };
-      if (typeof time === "string") times.push(time);
-    }
+    if (typeof entry === "string") return void times.push(entry);
+    if (!entry || typeof entry !== "object") return;
+    const { start, time } = entry as { start?: unknown; time?: unknown };
+    if (typeof start === "string") times.push(start);
+    else if (typeof time === "string") times.push(time);
   };
 
   const slots = (data as { slots?: unknown })?.slots ?? data;
@@ -89,8 +92,16 @@ function parseSlots(data: unknown): string[] {
     }
   }
 
-  // Sorted and de-duplicated so the prompt sees a stable, ascending list.
-  return [...new Set(times)].sort();
+  // Normalized to UTC because slots come back offset-formatted
+  // ("...T09:00:00.000-06:00") while the booking endpoint wants UTC. Doing it
+  // here means the string shown to the model is the same string we book, so
+  // there is no conversion step between agreeing a time and reserving it.
+  const utc = times
+    .map((t) => new Date(t))
+    .filter((d) => !Number.isNaN(d.getTime()))
+    .map((d) => d.toISOString());
+
+  return [...new Set(utc)].sort();
 }
 
 /**
