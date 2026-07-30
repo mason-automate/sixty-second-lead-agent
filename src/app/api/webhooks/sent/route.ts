@@ -231,7 +231,7 @@ async function maybeBook(
     const fmt = (opts: Intl.DateTimeFormatOptions) =>
       new Intl.DateTimeFormat("en-US", { ...opts, timeZone: BOOKING_TIMEZONE }).format(when);
 
-    await sendMessage({
+    const confirmation = await sendMessage({
       to: [conversation.phone],
       template: {
         name: process.env.SENT_BOOKING_TEMPLATE ?? "booking_confirmation",
@@ -242,6 +242,21 @@ async function maybeBook(
         },
       },
     });
+
+    // Recorded like any other send. The panel is the only view of what the
+    // handset received, so a message missing from it is a message we cannot
+    // account for — and its lifecycle webhooks would find no message to update.
+    const recipient = confirmation.recipients[0];
+    conversation.messages.push({
+      messageId: recipient.message_id,
+      direction: "outbound",
+      body: recipient.body ?? "Booking confirmation",
+      channel: recipient.channel,
+      status: confirmation.status,
+      events: [{ status: confirmation.status, at: new Date().toISOString() }],
+      createdAt: new Date().toISOString(),
+    });
+    await saveConversation(conversation);
   } catch (error) {
     // Deliberately swallowed: the lead's reply still goes out. Booking is the
     // bonus, the reply is the product.
