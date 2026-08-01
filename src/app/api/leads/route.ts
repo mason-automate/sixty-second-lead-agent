@@ -15,18 +15,25 @@ import type { Conversation, MessageRecord } from "@/lib/types";
 export const runtime = "nodejs";
 
 /**
- * Two ways to send the first message, and the choice is a real tradeoff:
+ * Two ways to send the first message. Only one of them works for a new lead.
  *
- *   "text"     — Claude's own words go out verbatim. WhatsApp only accepts
- *                free-form text inside the 24-hour customer service window,
- *                which opens when the contact messages you first. The demo
- *                pre-roll (every handset texts the sending number once) opens
- *                that window as a side effect, so this works while filming.
- *   "template" — Sends the Meta-approved `lead_response` template instead.
- *                Delivers to a cold contact on either channel, but the body is
- *                fixed, so only the name is personalized.
+ *   "template" — sends the approved `lead_response` template. The default, and
+ *                the only mode that reaches a contact you have not heard from.
+ *                The body is fixed, so only the name is personalized.
+ *   "text"     — sends Claude's own words verbatim. Valid ONLY once the contact
+ *                has messaged you, which opens the session window.
+ *
+ * Messaging platforms separate business-initiated messages from replies inside
+ * an open conversation, and this applies on SMS as well as WhatsApp. A cold
+ * free-form send is rejected — but the API returns success and QUEUED, and the
+ * message fails roughly 37ms later with no reason exposed anywhere, so "text"
+ * looks like it works right up until nothing arrives.
+ *
+ * The conversation satisfies the rule on its own: template first, the lead's
+ * reply opens the window, and every message after that is free-form (see
+ * handleInbound in the webhook route). Leave this alone.
  */
-const FIRST_MESSAGE_MODE = process.env.SENT_FIRST_MESSAGE_MODE ?? "text";
+const FIRST_MESSAGE_MODE = process.env.SENT_FIRST_MESSAGE_MODE ?? "template";
 const TEMPLATE_NAME = process.env.SENT_TEMPLATE_NAME ?? "lead_response";
 
 function toE164(input: string): string {
