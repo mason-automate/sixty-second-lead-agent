@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "draft": "node --env-file=.env.local --experimental-strip-types scripts/test-draft.mts"
+    "draft": "node --env-file=.env.local --experimental-strip-types scripts/test-draft.mts",
+    "webhook": "node scripts/register-webhook.mjs"
+  },
+  "engines": {
+    "node": ">=22.6.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

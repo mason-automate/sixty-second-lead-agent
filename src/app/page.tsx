@@ -33,6 +33,9 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // Fetching on mount and then on a timer is the whole point of a polling
+    // panel, and both paths set state by design.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const timer = setInterval(refresh, 1000);
     return () => clearInterval(timer);
