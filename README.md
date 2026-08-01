@@ -2,7 +2,7 @@
 
 An AI agent that texts every lead back in 60 seconds — on whatever app they actually use.
 
-A lead submits a form. Claude drafts a personal reply. The app makes **one** API call to [Sent](https://sent.dm) with **no `channel` field**, and Sent decides per contact whether that goes out as an SMS or a WhatsApp message. A live panel shows the delivery lifecycle as webhooks land: `QUEUED → PROCESSED → ROUTED → SENT → DELIVERED → READ`.
+A lead submits a form. Claude drafts a personal reply. The app makes **one** API call to [Sent](https://www.sent.dm/en?utm_source=masonanderson&utm_medium=x&utm_campaign=partner) with **no `channel` field**, and Sent decides per contact whether that goes out as an SMS or a WhatsApp message. A live panel shows the delivery lifecycle as webhooks land: `QUEUED → PROCESSED → ROUTED → SENT → DELIVERED → READ`.
 
 When the lead texts back, Claude keeps the conversation going, offers times that are genuinely open on your calendar, and books the call.
 
@@ -67,7 +67,7 @@ Messaging is regulated infrastructure, and most of the setup time is other peopl
 
 | | What | How long |
 | --- | --- | --- |
-| **Required** | [Sent](https://sent.dm) account and API key | minutes |
+| **Required** | [Sent](https://www.sent.dm/en?utm_source=masonanderson&utm_medium=x&utm_campaign=partner) account and API key | minutes |
 | **Required** | A sending number. For US SMS this means 10DLC/TCR registration — you complete a compliance form in the Sent dashboard and they register the campaign for you. **Sent assigns the number when the campaign is approved**; there is no separate provisioning step. | 1–3 business days (ours took 4 calendar days) |
 | **Required** | Two approved message templates (below) | Meta review, often same day |
 | **Required** | [Anthropic API key](https://platform.claude.com) | minutes |
@@ -268,6 +268,10 @@ Learned the hard way against the live API:
 - [Claude](https://platform.claude.com) (`claude-sonnet-5`) for drafting
 - [Cal.com](https://cal.com) for availability and booking, optional
 - [Upstash Redis](https://upstash.com) for state, optional in development
+
+## Disclosure
+
+This was built as a sponsored project for Sent, and the two Sent links above are referral-tagged. Everything the README says about the API was verified against the live service, including the parts that cost me an afternoon.
 
 ## License
 
