@@ -112,7 +112,7 @@ Rules that will get a template rejected or make it cost double:
 - **Stay under 160 characters with the variables expanded**, not as written.
 - **Never ask someone to "reply YES."** `YES` is a registered opt-in keyword on a 10DLC campaign, so it triggers the carrier's opt-in confirmation as well as your reply. Ask for a letter like `R`, or a time.
 - **Name your brand in the first message.** Required for SMS compliance.
-- Sent also enforces two undocumented rules at creation: a template needs at least one letter before the first variable and after the last, and at least `(2 × variables) + 1` words.
+- **Two more rules Sent enforces at creation.** A template needs at least one letter before the first variable and after the last, and at least `(2 × variables) + 1` words.
 
 ### 3. Fill in the environment
 

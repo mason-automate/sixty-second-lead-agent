@@ -78,9 +78,7 @@ const RESERVED_KEYWORDS = new Set([
 const MAX_SIGNATURE_AGE_SECONDS = 300;
 
 /**
- * Sent signs webhooks with the Standard Webhooks scheme. It is not documented
- * anywhere I could find, so for the record — this was recovered by brute-forcing
- * a known-good delivery:
+ * Sent signs webhooks with the Standard Webhooks scheme:
  *
  *   key       = base64-decode(signing secret with the "whsec_" prefix removed)
  *   content   = `{x-webhook-id}.{x-webhook-timestamp}.{raw request body}`
@@ -388,8 +386,8 @@ export async function POST(request: Request) {
 
   if (!verification.ok) {
     // Rejecting an unverified delivery is the correct default. It is worth
-    // being able to turn off: rejecting also stops the traffic you need in
-    // order to work out an undocumented signing scheme in the first place.
+    // being able to turn off, because rejecting also stops the traffic you
+    // need while you are still getting verification working.
     if (process.env.SENT_WEBHOOK_ENFORCE !== "false") {
       console.warn(`[webhook] rejected: ${verification.reason}`);
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
